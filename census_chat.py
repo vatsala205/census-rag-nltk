@@ -88,74 +88,121 @@ def predict_class(sentence):
 
 
 def extract_location_from_query(text):
-    """Extract location name from user query - Web compatible version"""
+    """
+    Extract location name from user query - PRIORITIZES TOTAL DATA
+    """
     if not location_data:
-        return None
+        return None, None
 
     # Convert to lowercase for matching
     text_lower = text.lower().strip()
 
     # Remove common query words
     query_words_to_remove = ['what', 'is', 'the', 'about', 'tell', 'me', 'how', 'many', 'much', 'show', 'give']
-    location_indicators = ['population', 'area', 'households', 'male', 'female', 'people', 'in', 'of', 'for']
+    location_indicators = ['population', 'area', 'households', 'male', 'female', 'people', 'in', 'of', 'for',
+                           'villages', 'towns']
 
     # Split text into words
     text_words = text_lower.split()
-    filtered_words = [word for word in text_words if word not in query_words_to_remove]
+    filtered_words = [word for word in text_words if
+                      word not in query_words_to_remove and word not in location_indicators]
 
-    # Method 1: Direct exact match (case-insensitive)
-    for location in location_data.keys():
-        if location.lower() == text_lower:
-            return location
+    # Method 1: Direct match - prioritize Total
+    for location_key in location_data.keys():
+        # Check for exact match with Total suffix
+        if location_key.lower().endswith(' total'):
+            base_location = location_key[:-6].lower()  # Remove ' Total'
+            if base_location == text_lower or base_location in text_lower:
+                return location_key, location_data[location_key]
 
-    # Method 2: Check if location name appears in the text
-    for location in location_data.keys():
-        location_lower = location.lower()
-        if location_lower in text_lower:
-            return location
+    # Method 2: Check if any word in query matches location name (prioritize Total)
+    potential_matches = []
 
-    # Method 3: Check individual words against location names
     for word in filtered_words:
-        if word in location_indicators:
+        if len(word) < 3:  # Skip very short words
             continue
 
-        for location in location_data.keys():
-            location_lower = location.lower()
-            # Check if the word matches the location exactly
-            if word == location_lower:
-                return location
+        for location_key in location_data.keys():
+            location_lower = location_key.lower()
 
-            # Check if the word is part of a multi-word location name
-            location_words = location_lower.split()
-            if word in location_words:
-                return location
+            # Extract base location name (without Total/Rural/Urban)
+            base_location = location_lower
+            if location_lower.endswith(' total'):
+                base_location = location_lower[:-6]
+            elif location_lower.endswith(' rural'):
+                base_location = location_lower[:-6]
+            elif location_lower.endswith(' urban'):
+                base_location = location_lower[:-6]
 
-    # Method 4: Fuzzy matching for partial names
+            # Check if word matches the base location
+            if word == base_location or word in base_location.split():
+                # Prioritize Total data
+                if location_key.endswith(' Total'):
+                    return location_key, location_data[location_key]
+                else:
+                    potential_matches.append((location_key, location_data[location_key]))
+
+    # Method 3: Partial matching with Total priority
     for word in filtered_words:
-        if len(word) < 3 or word in location_indicators:
+        if len(word) < 3:
             continue
 
-        for location in location_data.keys():
-            location_lower = location.lower()
-            location_words = location_lower.split()
+        for location_key in location_data.keys():
+            location_lower = location_key.lower()
 
-            for loc_word in location_words:
-                if len(loc_word) >= 3:
-                    # Check if word starts with the same letters
-                    if word.startswith(loc_word[:3]) or loc_word.startswith(word[:3]):
-                        return location
+            # Extract base location name
+            base_location = location_lower
+            if location_lower.endswith(' total'):
+                base_location = location_lower[:-6]
+            elif location_lower.endswith(' rural'):
+                base_location = location_lower[:-6]
+            elif location_lower.endswith(' urban'):
+                base_location = location_lower[:-6]
 
-                    # Check for substring matches
-                    if word in loc_word or loc_word in word:
-                        return location
+            # Check for partial matches
+            if (word in base_location or base_location.startswith(word) or
+                    any(loc_word.startswith(word) for loc_word in base_location.split())):
 
-    return None
+                # Prioritize Total data
+                if location_key.endswith(' Total'):
+                    return location_key, location_data[location_key]
+                else:
+                    potential_matches.append((location_key, location_data[location_key]))
+
+    # If we have potential matches but no Total, look for Total version
+    if potential_matches:
+        # Extract base names from potential matches
+        for match_key, match_data in potential_matches:
+            base_name = match_key
+            if match_key.endswith(' Rural'):
+                base_name = match_key[:-6]
+            elif match_key.endswith(' Urban'):
+                base_name = match_key[:-6]
+
+            # Look for Total version
+            total_key = f"{base_name} Total"
+            if total_key in location_data:
+                return total_key, location_data[total_key]
+
+        # If no Total found, return first match
+        return potential_matches[0]
+
+    return None, None
 
 
-def format_demographic_response(intent_tag, location, data):
+def format_demographic_response(intent_tag, location_key, data):
     """Format demographic data into readable response"""
     if not data:
-        return f"Sorry, I don't have demographic data for {location}."
+        return f"Sorry, I don't have demographic data for the requested location."
+
+    # Extract clean location name (remove Total/Rural/Urban suffix)
+    location_name = location_key
+    if location_key.endswith(' Total'):
+        location_name = location_key[:-6]
+    elif location_key.endswith(' Rural'):
+        location_name = location_key[:-6]
+    elif location_key.endswith(' Urban'):
+        location_name = location_key[:-6]
 
     if intent_tag == "population_query":
         total_pop = data.get('population', 0)
@@ -163,64 +210,84 @@ def format_demographic_response(intent_tag, location, data):
         females = data.get('females', 0)
 
         if total_pop > 0:
-            return f"The population of {location} is {total_pop:,.0f} with {males:,.0f} males ({males / total_pop * 100:.1f}%) and {females:,.0f} females ({females / total_pop * 100:.1f}%)."
+            male_pct = (males / total_pop * 100) if total_pop > 0 else 0
+            female_pct = (females / total_pop * 100) if total_pop > 0 else 0
+            return f"The population of {location_name} is {total_pop:,} with {males:,} males ({male_pct:.1f}%) and {females:,} females ({female_pct:.1f}%)."
         else:
-            return f"{location} appears to have no recorded population data."
+            return f"{location_name} appears to have no recorded population data."
 
     elif intent_tag == "area_query":
         area = data.get('area', 0)
         density = data.get('density', 0)
         if area > 0:
-            return f"The area of {location} is {area:,.0f} square kilometers with a population density of {density:,.0f} people per sq km."
+            return f"The area of {location_name} is {area:,} square kilometers with a population density of {density:,} people per sq km."
         else:
-            return f"No area data available for {location}."
+            return f"No area data available for {location_name}."
 
     elif intent_tag == "household_query":
         households = data.get('households', 0)
         if households > 0:
-            return f"There are {households:,.0f} households in {location}."
+            return f"There are {households:,} households in {location_name}."
         else:
-            return f"No household data available for {location}."
+            return f"No household data available for {location_name}."
 
     elif intent_tag == "rural_urban_query":
         ratio = data.get('ratio', 0)
         if ratio > 0:
-            return f"The rural-urban ratio in {location} is {ratio:.2f} (meaning {ratio:.2f} rural people for every 1 urban person)."
+            return f"The rural-urban ratio in {location_name} is {ratio:.2f} (meaning {ratio:.2f} rural people for every 1 urban person)."
         else:
-            return f"No rural-urban ratio data available for {location}."
+            return f"No rural-urban ratio data available for {location_name}."
 
     elif intent_tag == "villages_towns_query":
         villages = data.get('villages', 0)
         uninhabited = data.get('uninhabited', 0)
         towns = data.get('towns', 0)
-        return f"In {location}, there are {villages:,.0f} inhabited villages, {uninhabited:,.0f} uninhabited villages, and {towns:,.0f} towns."
+        return f"In {location_name}, there are {villages:,} inhabited villages, {uninhabited:,} uninhabited villages, and {towns:,} towns."
 
     else:
-        # General overview
+        # General overview - prioritize meaningful data
         pop = data.get('population', 0)
         area = data.get('area', 0)
         households = data.get('households', 0)
         if pop > 0:
-            return f"Here's the demographic overview for {location}: Population: {pop:,.0f}, Area: {area:,.0f} sq km, Households: {households:,.0f}"
+            return f"Here's the demographic overview for {location_name}: Population: {pop:,}, Area: {area:,} sq km, Households: {households:,}"
         else:
-            return f"Limited demographic data available for {location}."
+            return f"Limited demographic data available for {location_name}."
 
 
 def suggest_similar_locations(user_input, max_suggestions=3):
-    """Suggest similar location names based on user input"""
+    """Suggest similar location names based on user input - prioritize Total entries"""
     if not location_data:
         return []
 
     suggestions = []
     query_words = user_input.lower().split()
 
+    # First, look for Total entries
     for location in location_data.keys():
-        location_lower = location.lower()
-        for word in query_words:
-            if len(word) > 2 and (word in location_lower or location_lower.startswith(word)):
-                if location not in suggestions:
-                    suggestions.append(location)
-                    break
+        if location.endswith(' Total'):
+            base_location = location[:-6].lower()
+            for word in query_words:
+                if len(word) > 2 and (word in base_location or base_location.startswith(word)):
+                    clean_name = location[:-6]  # Remove ' Total'
+                    if clean_name not in suggestions:
+                        suggestions.append(clean_name)
+                        break
+
+    # If not enough suggestions, look at all entries
+    if len(suggestions) < max_suggestions:
+        for location in location_data.keys():
+            location_lower = location.lower()
+            # Extract base name
+            base_name = location
+            if location.endswith(' Total') or location.endswith(' Rural') or location.endswith(' Urban'):
+                base_name = location[:-6]
+
+            for word in query_words:
+                if len(word) > 2 and (word in location_lower or location_lower.startswith(word)):
+                    if base_name not in suggestions:
+                        suggestions.append(base_name)
+                        break
 
     return suggestions[:max_suggestions]
 
@@ -238,16 +305,14 @@ def get_response(intents_list, intents_json, user_input):
                                  'villages_towns_query']
 
     if intent_tag in location_specific_intents:
-        location = extract_location_from_query(user_input)
+        location_key, data = extract_location_from_query(user_input)
 
-        if location and location in location_data:
+        if location_key and data:
             # Check if we have valid data
-            data = location_data[location]
-
             if data.get('population', 0) == 0 and data.get('area', 0) == 0:
-                return f"I found {location} in the database, but it appears to have no recorded data."
+                return f"I found the location in the database, but it appears to have no recorded data."
 
-            return format_demographic_response(intent_tag, location, data)
+            return format_demographic_response(intent_tag, location_key, data)
         else:
             # Try to suggest similar locations
             similar_locations = suggest_similar_locations(user_input)
@@ -261,13 +326,15 @@ def get_response(intents_list, intents_json, user_input):
         if not location_data:
             return "Sorry, location data is not available right now."
 
-        # For comparison queries, provide top populated regions
-        top_regions = sorted(location_data.items(), key=lambda x: x[1].get('population', 0), reverse=True)[:5]
+        # For comparison queries, provide top populated regions (Total data only)
+        total_regions = {k: v for k, v in location_data.items() if k.endswith(' Total')}
+        top_regions = sorted(total_regions.items(), key=lambda x: x[1].get('population', 0), reverse=True)[:5]
         response = "Here are the top 5 most populated regions:\n"
-        for i, (region, data) in enumerate(top_regions, 1):
+        for i, (region_key, data) in enumerate(top_regions, 1):
             pop = data.get('population', 0)
+            region_name = region_key[:-6]  # Remove ' Total'
             if pop > 0:
-                response += f"{i}. {region}: {pop:,.0f} people\n"
+                response += f"{i}. {region_name}: {pop:,} people\n"
         return response
 
     else:
@@ -328,8 +395,9 @@ def test_chatbot():
     """Test function to check if chatbot is working"""
     test_queries = [
         "what is the population of goa",
-        "area of delhi",
-        "households in mumbai"
+        "population of delhi",
+        "area of mumbai",
+        "households in kerala"
     ]
 
     print("Testing chatbot responses:")
