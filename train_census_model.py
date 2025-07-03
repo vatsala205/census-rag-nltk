@@ -150,9 +150,3 @@ if __name__ == "__main__":
     model, history = train_census_chatbot()
 
     print("\nTraining completed!")
-    # print("Next steps:")
-    # print("1. Run the chatbot with: python census_chat.py")
-    # print("2. Test with queries like:")
-    # print("   - 'What is the population of [location]?'")
-    # print("   - 'How big is [location]?'")
-    # print("   - 'Tell me about households in [location]'")
